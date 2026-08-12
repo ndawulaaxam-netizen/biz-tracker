@@ -365,4 +365,1009 @@ const defaultShops=[
 let currentRole=null;
 let selectedRole=null;
 
-function migrateState(p)
+function migrateState(p){
+return{
+settings:{...defaultSettings,...((p&&p.settings)||{})},
+ownerPin:(p&&p.ownerPin)||"1234",
+shops:(p&&p.shops)||[...defaultShops],
+customerGroups:(p&&p.customerGroups)||[...defaultCustomerGroups],
+batches:(p&&p.batches)||[],
+sales:(p&&p.sales)||[],
+expenses:(p&&p.expenses)||[],
+shopRecs:(p&&p.shopRecs)||[],
+suppliers:(p&&p.suppliers)||[]
+};
+}
+
+function loadLocal(){
+try{const r=localStorage.getItem(STORAGE_KEY);if(!r)return migrateState({});return migrateState(JSON.parse(r));}
+catch(e){return migrateState({});}
+}
+
+function loadCloudConfig(){try{return JSON.parse(localStorage.getItem(CLOUD_KEY)||"null");}catch(e){return null;}}
+
+let state=loadLocal();
+let cloudConfig=loadCloudConfig();
+let sb=null;
+let currentUser=null;
+let pushTimer=null;
+let currentReportText="";
+
+function saveLocalOnly(){localStorage.setItem(STORAGE_KEY,JSON.stringify(state));}
+function saveState(){saveLocalOnly();renderAll();schedulePush();}
+function schedulePush(){if(sb&&currentUser){clearTimeout(pushTimer);pushTimer=setTimeout(()=>uploadRemote(false),1500);}}
+
+// ===== DYNAMIC SHOP HELPERS =====
+function getShopById(id){return state.shops.find(s=>s.id===id);}
+function getShopName(){
+if(currentRole==="owner")return null;
+const s=getShopById(currentRole);
+return s?s.name:null;
+}
+function renderLoginRoles(){
+const c=document.getElementById("roleButtons");
+let html=`<button onclick="selectRole('owner')" id="roleBtn-owner">Owner</button>`;
+state.shops.forEach(s=>{
+html+=`<button onclick="selectRole('${s.id}')" id="roleBtn-${s.id}">${s.name}</button>`;
+});
+c.innerHTML=html;
+}
+function renderShopDropdowns(){
+const saleCh=document.getElementById("saleChannel");
+const shopNm=document.getElementById("shopName");
+let opts=`<option>Direct</option>`;
+let shopOpts=``;
+state.shops.forEach(s=>{
+opts+=`<option>${s.name}</option>`;
+shopOpts+=`<option>${s.name}</option>`;
+});
+saleCh.innerHTML=opts;
+shopNm.innerHTML=shopOpts;
+}
+
+// ===== LOGIN SYSTEM =====
+function selectRole(role){
+selectedRole=role;
+document.querySelectorAll(".role-btns button").forEach(b=>b.classList.remove("selected"));
+const btn=document.getElementById("roleBtn-"+role);
+if(btn)btn.classList.add("selected");
+document.getElementById("loginPin").value="";
+document.getElementById("loginError").style.display="none";
+document.getElementById("loginPin").focus();
+}
+
+function attemptLogin(){
+const pin=document.getElementById("loginPin").value;
+let correctPin;
+if(selectedRole==="owner"){
+correctPin=state.ownerPin;
+}else{
+const shop=getShopById(selectedRole);
+correctPin=shop?shop.pin:null;
+}
+if(pin===correctPin){
+currentRole=selectedRole;
+document.getElementById("loginOverlay").style.display="none";
+applyRole();
+}else{
+document.getElementById("loginError").style.display="block";
+}
+}
+
+function applyRole(){
+const ownerNav=document.getElementById("ownerNav");
+const shopNav=document.getElementById("shopNav");
+const headerRole=document.getElementById("headerRole");
+const logoutBtn=document.getElementById("logoutBtn");
+
+document.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));
+
+if(currentRole==="owner"){
+ownerNav.style.display="flex";
+shopNav.style.display="none";
+logoutBtn.style.display="block";
+headerRole.textContent="Owner access — full dashboard.";
+document.getElementById("dashboard").classList.add("active");
+ownerNav.querySelectorAll("button").forEach(b=>b.classList.remove("active"));
+ownerNav.querySelector('[data-tab="dashboard"]').classList.add("active");
+}else{
+ownerNav.style.display="none";
+shopNav.style.display="flex";
+logoutBtn.style.display="block";
+const shopName=getShopName();
+headerRole.textContent=shopName+" staff access.";
+document.getElementById("shopDashTitle").textContent="My Dashboard — "+shopName;
+document.getElementById("shopDashboard").classList.add("active");
+shopNav.querySelectorAll("button").forEach(b=>b.classList.remove("active"));
+shopNav.querySelector('[data-tab="shopDashboard"]').classList.add("active");
+}
+renderAll();
+}
+
+function logout(){
+currentRole=null;
+selectedRole=null;
+document.getElementById("loginOverlay").style.display="flex";
+document.getElementById("ownerNav").style.display="none";
+document.getElementById("shopNav").style.display="none";
+document.getElementById("logoutBtn").style.display="none";
+document.getElementById("headerRole").textContent="Dynamic shop system with role-based access.";
+document.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));
+document.getElementById("loginPin").value="";
+document.getElementById("loginError").style.display="none";
+document.querySelectorAll(".role-btns button").forEach(b=>b.classList.remove("selected"));
+renderLoginRoles();
+}
+
+// ===== SHOP MANAGEMENT =====
+function addShop(){
+const name=document.getElementById("newShopName").value.trim();
+const pin=document.getElementById("newShopPin").value.trim();
+if(!name){alert("Enter shop name.");return;}
+if(!pin){alert("Enter shop PIN.");return;}
+const id="shop_"+Date.now().toString(36);
+state.shops.push({id,name,pin});
+document.getElementById("newShopName").value="";
+document.getElementById("newShopPin").value="";
+saveState();
+renderLoginRoles();
+renderShopDropdowns();
+renderShopManagement();
+alert("Shop '"+name+"' added.");
+}
+
+function deleteShop(id){
+const shop=getShopById(id);
+if(!shop)return;
+if(!confirm("Delete '"+shop.name+"'? This shop will no longer be able to log in. Sales history is preserved."))return;
+state.shops=state.shops.filter(s=>s.id!==id);
+saveState();
+renderLoginRoles();
+renderShopDropdowns();
+renderShopManagement();
+alert("Shop deleted.");
+}
+
+function editShopPin(id){
+const shop=getShopById(id);
+if(!shop)return;
+const newPin=prompt("Enter new PIN for '"+shop.name+"':");
+if(newPin&&newPin.trim()){
+shop.pin=newPin.trim();
+saveState();
+renderShopManagement();
+alert("PIN updated for '"+shop.name+"'.");
+}
+}
+
+function editShopName(id){
+const shop=getShopById(id);
+if(!shop)return;
+const newName=prompt("Enter new name for '"+shop.name+"':",shop.name);
+if(newName&&newName.trim()){
+shop.name=newName.trim();
+saveState();
+renderLoginRoles();
+renderShopDropdowns();
+renderShopManagement();
+alert("Shop renamed.");
+}
+}
+
+function renderShopManagement(){
+const list=document.getElementById("shopManagementList");
+if(!state.shops.length){
+list.innerHTML=`<div class="small">No shops added yet.</div>`;
+return;
+}
+list.innerHTML=state.shops.map(s=>`
+<div class="history-item">
+<div class="history-top">
+<span>🏪 ${s.name}</span>
+<div style="display:flex;gap:6px;flex-wrap:wrap">
+<button class="secondary" onclick="editShopName('${s.id}')" style="padding:6px 10px;font-size:12px">✏️ Rename</button>
+<button class="secondary" onclick="editShopPin('${s.id}')" style="padding:6px 10px;font-size:12px">🔑 PIN</button>
+<button class="danger" onclick="deleteShop('${s.id}')" style="padding:6px 10px;font-size:12px">🗑️ Delete</button>
+</div>
+</div>
+<div class="history-details">PIN: ${s.pin} • ID: ${s.id}</div>
+</div>`).join("");
+}
+
+// ===== CLOUD =====
+function initCloud(){
+const status=document.getElementById("cloudStatus");
+if(!cloudConfig||!cloudConfig.url||!cloudConfig.key){if(status)status.textContent="Cloud not configured.";renderAuth();return;}
+if(!window.supabase){if(status)status.textContent="Supabase library failed to load.";renderAuth();return;}
+try{
+sb=window.supabase.createClient(cloudConfig.url,cloudConfig.key);
+if(status)status.textContent="Cloud configured.";
+sb.auth.onAuthStateChange((e,session)=>{
+currentUser=(session&&session.user)||null;
+renderAuth();
+if(currentUser)loadRemoteAuto();
+else if(status)status.textContent="Logged out.";
+});
+}catch(e){if(status)status.textContent="Cloud error: "+e.message;renderAuth();}
+}
+
+function setSync(m){const el=document.getElementById("cloudStatus");if(el)el.textContent=m;}
+
+function renderAuth(){
+const a=document.getElementById("authArea");
+if(!a)return;
+if(!sb){a.innerHTML='<div class="small">Configure Supabase first.</div>';return;}
+if(currentUser){
+a.innerHTML=`<div class="small">Signed in as <strong>${currentUser.email}</strong></div>
+<div class="actions"><button class="secondary" onclick="cloudSignOut()">Log out</button></div>`;
+}else{
+a.innerHTML=`<label>Email</label><input id="authEmail" type="email"/>
+<label>Password</label><input id="authPassword" type="password"/>
+<div class="actions">
+<button class="primary" onclick="cloudSignUp()">Sign Up</button>
+<button class="secondary" onclick="cloudSignIn()">Sign In</button>
+</div><div id="authMsg" class="small"></div>`;
+}
+}
+
+async function cloudSignUp(){
+if(!sb)return;
+const e=document.getElementById("authEmail").value.trim();
+const p=document.getElementById("authPassword").value;
+const m=document.getElementById("authMsg");
+if(!e||!p){m.textContent="Enter email and password.";return;}
+const{error}=await sb.auth.signUp({email:e,password:p});
+if(error)m.textContent=error.message;
+else m.textContent="Account created.";
+}
+
+async function cloudSignIn(){
+if(!sb)return;
+const e=document.getElementById("authEmail").value.trim();
+const p=document.getElementById("authPassword").value;
+const m=document.getElementById("authMsg");
+if(!e||!p){m.textContent="Enter email and password.";return;}
+const{error}=await sb.auth.signInWithPassword({email:e,password:p});
+if(error)m.textContent=error.message;
+else{m.textContent="Signed in.";loadRemoteAuto();}
+renderAuth();
+}
+
+async function cloudSignOut(){if(sb)await sb.auth.signOut();currentUser=null;renderAuth();}
+
+async function loadRemoteAuto(){
+if(!sb||!currentUser)return;
+setSync("Downloading...");
+const{data,error}=await sb.from("tracker_states").select("state").eq("user_id",currentUser.id).maybeSingle();
+if(error){setSync("Download error: "+error.message);return;}
+if(data&&data.state&&data.state.settings){
+state=migrateState(data.state);
+saveLocalOnly();
+renderLoginRoles();
+renderShopDropdowns();
+renderAll();
+setSync("Cloud data loaded.");
+}else{
+setSync("No cloud data. Uploading...");
+await uploadRemote(false);
+}
+}
+
+async function uploadRemote(showAlert){
+if(!sb||!currentUser){if(showAlert)alert("Sign in first.");return;}
+setSync("Uploading...");
+const{error}=await sb.from("tracker_states").upsert({user_id:currentUser.id,state:state,updated_at:new Date().toISOString()},{onConflict:"user_id"});
+if(error){setSync("Upload error: "+error.message);if(showAlert)alert(error.message);}
+else{setSync("Synced "+new Date().toLocaleTimeString());if(showAlert)alert("Uploaded.");}
+}
+
+function downloadCloudManual(){if(!sb||!currentUser){alert("Sign in first.");return;}if(!confirm("Replace local data with cloud?"))return;loadRemoteAuto();}
+function uploadCloudManual(){if(!sb||!currentUser){alert("Sign in first.");return;}if(!confirm("Replace cloud data with local?"))return;uploadRemote(true);}
+
+// ===== HELPERS =====
+function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,8);}
+function today(){return new Date().toISOString().slice(0,10);}
+function fmt(n){return new Intl.NumberFormat(undefined,{maximumFractionDigits:0}).format(Number(n||0));}
+function fmt2(n){return new Intl.NumberFormat(undefined,{maximumFractionDigits:2}).format(Number(n||0));}
+function clampPct(v,t){if(!t)return 0;return Math.max(0,Math.min(100,(v/t)*100));}
+function weekStart(ds){const d=new Date((ds||today())+"T00:00:00");const day=(d.getDay()+6)%7;d.setDate(d.getDate()-day);return d.toISOString().slice(0,10);}
+function weekLabel(ws){return new Date(ws+"T00:00:00").toLocaleDateString(undefined,{month:"short",day:"numeric"});}
+function progressBar(v,t){const p=clampPct(v,t);return`<div class="progress"><div style="width:${p}%"></div></div><div class="small">${p.toFixed(1)}%</div>`;}
+
+// ===== CALCULATIONS =====
+function getTotals(){
+const produced=state.batches.reduce((s,b)=>s+Number(b.joints||0),0);
+const totalBatchCost=state.batches.reduce((s,b)=>s+Number(b.totalCost||0),0);
+const avgCost=produced>0?totalBatchCost/produced:0;
+const sold=state.sales.reduce((s,x)=>s+Number(x.qty||0),0);
+const inventory=produced-sold;
+const gross=state.sales.reduce((s,x)=>s+Number(x.gross||0),0);
+const shopCut=state.sales.reduce((s,x)=>s+Number(x.shopCut||0),0);
+const net=gross-shopCut;
+const packaging=state.sales.reduce((s,x)=>s+Number(x.packagingCost||0),0);
+const cogs=sold*avgCost;
+const operatingExpenses=state.expenses.filter(e=>e.type!=="inventory").reduce((s,e)=>s+Number(e.amount||0),0);
+const inventoryPurchases=state.expenses.filter(e=>e.type==="inventory").reduce((s,e)=>s+Number(e.amount||0),0);
+const totalExpenses=operatingExpenses+inventoryPurchases;
+const profit=net-cogs-packaging-operatingExpenses;
+const collectedNet=state.sales.filter(s=>s.collected).reduce((s,x)=>s+Number(x.net||0),0);
+const cash=Number(state.settings.startingCapital||0)-totalBatchCost-packaging+collectedNet-totalExpenses;
+const businessValue=cash+Math.max(0,inventory)*avgCost;
+return{produced,totalBatchCost,avgCost,sold,inventory,gross,shopCut,net,packaging,cogs,operatingExpenses,inventoryPurchases,totalExpenses,profit,collectedNet,cash,businessValue};
+}
+
+function getWeeklyData(){
+const map={};
+function ensure(k){if(!map[k])map[k]={net:0,out:0,operating:0,cogs:0,packaging:0,profit:0,joints:0};return map[k];}
+state.sales.forEach(s=>{const w=ensure(weekStart(s.date));w.net+=Number(s.net||0);w.joints+=Number(s.qty||0);w.cogs+=Number(s.cogs||0);w.packaging+=Number(s.packagingCost||0);});
+state.expenses.forEach(e=>{const w=ensure(weekStart(e.date));w.out+=Number(e.amount||0);if(e.type!=="inventory")w.operating+=Number(e.amount||0);});
+Object.values(map).forEach(w=>{w.profit=w.net-w.cogs-w.packaging-w.operating;});
+return Object.keys(map).sort().slice(-8).map(k=>({week:k,...map[k]}));
+}
+
+function getChannelData(){
+const channels={};
+state.sales.forEach(s=>{
+const ch=s.channel||"Direct";
+if(!channels[ch])channels[ch]={qty:0,gross:0,shopCut:0,net:0,packaging:0,cogs:0,profit:0};
+const c=channels[ch];
+c.qty+=Number(s.qty||0);
+c.gross+=Number(s.gross||0);
+c.shopCut+=Number(s.shopCut||0);
+c.net+=Number(s.net||0);
+c.packaging+=Number(s.packagingCost||0);
+c.cogs+=Number(s.cogs||0);
+});
+Object.keys(channels).forEach(k=>{
+const c=channels[k];
+c.profit=c.net-c.cogs-c.packaging;
+c.avgProfit=c.qty>0?c.profit/c.qty:0;
+});
+return channels;
+}
+
+function getShopData(shopName){
+const sales=state.sales.filter(s=>s.channel===shopName);
+const qty=sales.reduce((s,x)=>s+Number(x.qty||0),0);
+const gross=sales.reduce((s,x)=>s+Number(x.gross||0),0);
+const cut=sales.reduce((s,x)=>s+Number(x.shopCut||0),0);
+const net=sales.reduce((s,x)=>s+Number(x.net||0),0);
+const recs=state.shopRecs.filter(r=>r.shop===shopName);
+const lastRec=recs.length?recs[recs.length-1]:null;
+const stockRemaining=lastRec?lastRec.physical:0;
+const missing=lastRec?lastRec.missing:0;
+return{qty,gross,cut,net,stockRemaining,missing,sales,recs};
+}
+
+// ===== RENDER FUNCTIONS =====
+function switchTab(t){
+document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));
+document.getElementById(t).classList.add("active");
+const nav=currentRole==="owner"?document.getElementById("ownerNav"):document.getElementById("shopNav");
+nav.querySelectorAll("button").forEach(b=>b.classList.remove("active"));
+nav.querySelector(`[data-tab="${t}"]`).classList.add("active");
+}
+
+function renderDashboard(){
+const t=getTotals();
+document.getElementById("dashboardCards").innerHTML=`
+<div class="card"><div class="label">Estimated Cash</div><div class="value">${fmt(t.cash)}</div></div>
+<div class="card"><div class="label">Business Value</div><div class="value">${fmt(t.businessValue)}</div></div>
+<div class="card"><div class="label">Net Profit</div><div class="value ${t.profit>=0?"pos":"neg"}">${fmt(t.profit)}</div></div>
+<div class="card"><div class="label">Joints Produced</div><div class="value">${fmt(t.produced)}</div></div>
+<div class="card"><div class="label">Joints Sold</div><div class="value">${fmt(t.sold)}</div></div>
+<div class="card"><div class="label">Inventory Left</div><div class="value">${fmt(t.inventory)}</div></div>
+<div class="card"><div class="label">Avg Cost / Joint</div><div class="value">${fmt2(t.avgCost)}</div></div>
+<div class="card"><div class="label">Gross Sales</div><div class="value">${fmt(t.gross)}</div></div>
+<div class="card"><div class="label">Shop Cuts Paid</div><div class="value">${fmt(t.shopCut)}</div></div>
+<div class="card"><div class="label">Net Sales</div><div class="value">${fmt(t.net)}</div></div>
+<div class="card"><div class="label">Operating Expenses</div><div class="value">${fmt(t.operatingExpenses)}</div></div>
+<div class="card"><div class="label">Stock Purchases</div><div class="value">${fmt(t.inventoryPurchases)}</div></div>
+<div class="card"><div class="label">Progress to Kilo</div><div class="value">${fmt(Math.max(0,t.businessValue))}</div>${progressBar(t.businessValue,250000)}</div>
+<div class="card"><div class="label">Progress to 1M</div><div class="value">${fmt(Math.max(0,t.businessValue))}</div>${progressBar(t.businessValue,1000000)}</div>`;
+}
+
+function renderWeekly(){
+const weeks=getWeeklyData();
+const chart=document.getElementById("weeklyChart");
+const table=document.getElementById("weeklyTable");
+if(!weeks.length){chart.innerHTML=`<div class="small">No data yet.</div>`;table.innerHTML="";return;}
+const max=Math.max(...weeks.map(w=>Math.max(w.net,w.out,Math.abs(w.profit))),1);
+chart.innerHTML=weeks.map(w=>{
+const hN=Math.max(2,Math.round(w.net/max*120));
+const hO=Math.max(2,Math.round(w.out/max*120));
+const hP=Math.max(2,Math.round(Math.abs(w.profit)/max*120));
+const pColor=w.profit>=0?"var(--green)":"var(--red)";
+return`<div class="week"><div class="bars">
+<div class="bar" style="height:${hN}px;background:var(--blue)"></div>
+<div class="bar" style="height:${hO}px;background:var(--amber)"></div>
+<div class="bar" style="height:${hP}px;background:${pColor}"></div>
+</div><div class="week-label">${weekLabel(w.week)}</div></div>`;
+}).join("");
+table.innerHTML=`<table><tr><th>Week</th><th>Joints</th><th>Net</th><th>Out</th><th>Profit</th></tr>`+
+weeks.map(w=>`<tr><td>${weekLabel(w.week)}</td><td>${fmt(w.joints)}</td><td>${fmt(w.net)}</td><td>${fmt(w.out)}</td><td class="${w.profit>=0?"pos":"neg"}">${fmt(w.profit)}</td></tr>`).join("")+`</table>`;
+}
+
+function renderCompare(){
+const ch=getChannelData();
+const keys=Object.keys(ch);
+if(!keys.length){document.getElementById("compareContent").innerHTML=`<div class="panel"><div class="small">No sales yet.</div></div>`;return;}
+let bestProfit=null,bestAvg=null;
+keys.forEach(k=>{
+if(!bestProfit||ch[k].profit>ch[bestProfit].profit)bestProfit=k;
+if(!bestAvg||ch[k].avgProfit>ch[bestAvg].avgProfit)bestAvg=k;
+});
+let html=`<div class="compare-grid">`;
+keys.forEach(k=>{
+const c=ch[k];
+html+=`<div class="panel">
+<h2>${k} ${k===bestProfit?'<span class="badge badge-green">Top Profit</span>':''} ${k===bestAvg?'<span class="badge badge-blue">Best/Joint</span>':''}</h2>
+<div class="small">Joints: <strong>${fmt(c.qty)}</strong></div>
+<div class="small">Gross: <strong>${fmt(c.gross)}</strong></div>
+<div class="small">Cuts paid: <strong>${fmt(c.shopCut)}</strong></div>
+<div class="small">Net: <strong>${fmt(c.net)}</strong></div>
+<div class="small">Profit: <strong class="${c.profit>=0?"pos":"neg"}">${fmt(c.profit)}</strong></div>
+<div class="small">Avg/joint: <strong>${fmt2(c.avgProfit)}</strong></div>
+</div>`;
+});
+html+=`</div>`;
+document.getElementById("compareContent").innerHTML=html;
+}
+
+function renderShops(){
+const list=[...state.shopRecs].reverse();
+document.getElementById("shopHistory").innerHTML=list.length?list.map(r=>`
+<div class="history-item">
+<div class="history-top"><span>${r.date} • ${r.shop}</span><button class="danger" onclick="deleteShopRec('${r.id}')">Delete</button></div>
+<div class="history-details">
+Opening: ${fmt(r.opening)} | Restock: ${fmt(r.restock)} | Sold: ${fmt(r.sold)} | Physical: ${fmt(r.physical)}<br/>
+Missing: <span class="${r.missing>0?"neg":"pos"}">${fmt(r.missing)}</span> |
+Expected: ${fmt(r.expectedCash)} | Actual: ${fmt(r.actualCash)} |
+Diff: <span class="${r.cashDiff>=0?"pos":"neg"}">${fmt(r.cashDiff)}</span>
+</div>
+</div>`).join(""):`<div class="small">No reconciliations yet.</div>`;
+document.getElementById("shopRecHistory").innerHTML=document.getElementById("shopHistory").innerHTML;
+}
+
+function renderSuppliers(){
+const list=[...state.suppliers].reverse();
+document.getElementById("supplierList").innerHTML=list.length?list.map(s=>`
+<div class="history-item">
+<div class="history-top"><span>${s.name} ${s.rating?"⭐".repeat(Math.min(5,Math.max(1,Math.round(s.rating)))):""}</span>
+<button class="danger" onclick="deleteSupplier('${s.id}')">Delete</button></div>
+<div class="history-details">${s.product||"N/A"} • ${fmt(s.priceGram)}/g • ${s.phone||"No phone"}${s.notes?"<br/>"+s.notes:""}</div>
+</div>`).join(""):`<div class="small">No suppliers yet.</div>`;
+}
+
+function renderCustomerGroups(){
+const sel=document.getElementById("saleCustomerGroup");
+sel.innerHTML=state.customerGroups.map((g,i)=>`<option value="${i}">${g.name}</option>`).join("");
+document.getElementById("customerGroupList").innerHTML=state.customerGroups.map((g,i)=>`
+<div class="history-item">
+<div class="history-top"><span>${g.name}</span>
+<button class="danger" onclick="deleteCustomerGroup(${i})">Delete</button></div>
+<div class="history-details">Unpackaged: ${fmt(g.unpackaged)} | Packaged: ${fmt(g.packaged)}</div>
+</div>`).join("");
+}
+
+function renderSettings(){
+document.getElementById("setStarting").value=state.settings.startingCapital;
+document.getElementById("setBatchCost").value=state.settings.batchCostPer30;
+document.getElementById("setPackaging").value=state.settings.packagingCost;
+document.getElementById("setShopCut").value=state.settings.shopCut;
+document.getElementById("setExtraBangis").value=state.settings.extraBangisCost;
+document.getElementById("setDefaultUnpackaged").value=state.settings.defaultUnpackagedPrice;
+document.getElementById("setDefaultPackaged").value=state.settings.defaultPackagedPrice;
+document.getElementById("pinOwner").value=state.ownerPin;
+}
+
+function renderExpenses(){
+const list=[...state.expenses].reverse().slice(0,8);
+document.getElementById("expenseList").innerHTML=list.length?list.map(e=>`
+<div class="history-item">
+<div class="history-top"><span>${e.date} • ${e.category}</span><button class="danger" onclick="deleteExpense('${e.id}')">Delete</button></div>
+<div class="history-details">Amount: ${fmt(e.amount)}${e.note?" • "+e.note:""}</div>
+</div>`).join(""):`<div class="small">No expenses yet.</div>`;
+document.getElementById("expenseHistory").innerHTML=document.getElementById("expenseList").innerHTML;
+}
+
+function renderHistory(){
+document.getElementById("salesHistory").innerHTML=[...state.sales].reverse().map(s=>`
+<div class="history-item">
+<div class="history-top"><span>${s.date} • ${s.channel} • ${s.customerGroup||"Regular"}</span>
+<button class="danger" onclick="deleteSale('${s.id}')">Delete</button></div>
+<div class="history-details">${s.qty} joints • ${s.packaged?"Packaged":"Unpackaged"} • ${fmt(s.price)}<br/>
+Gross ${fmt(s.gross)} | Cut ${fmt(s.shopCut)} | Net ${fmt(s.net)}<br/>
+Profit <span class="${s.profit>=0?"pos":"neg"}">${fmt(s.profit)}</span> • ${s.collected?"Collected":"Not collected"}</div>
+</div>`).join("")||`<div class="small">No sales yet.</div>`;
+
+document.getElementById("batchHistory").innerHTML=[...state.batches].reverse().map(b=>`
+<div class="history-item">
+<div class="history-top"><span>${b.date} • ${b.productType.toUpperCase()}</span>
+<button class="danger" onclick="deleteBatch('${b.id}')">Delete</button></div>
+<div class="history-details">${b.joints} joints • Total ${fmt(b.totalCost)} • ${fmt2(b.costPerJoint)}/joint</div>
+</div>`).join("")||`<div class="small">No batches yet.</div>`;
+}
+
+// ===== SHOP STAFF RENDER =====
+function renderShopDashboard(){
+const shopName=getShopName();
+const d=getShopData(shopName);
+document.getElementById("shopDashCards").innerHTML=`
+<div class="card"><div class="label">Joints Sold</div><div class="value">${fmt(d.qty)}</div></div>
+<div class="card"><div class="label">Total Sales</div><div class="value">${fmt(d.gross)}</div></div>
+<div class="card"><div class="label">My Cut Earned</div><div class="value pos">${fmt(d.cut)}</div></div>
+<div class="card"><div class="label">Stock Remaining</div><div class="value">${fmt(d.stockRemaining)}</div></div>
+<div class="card"><div class="label">Missing Stock</div><div class="value ${d.missing>0?"neg":"pos"}">${fmt(d.missing)}</div></div>`;
+}
+
+function renderShopPerformance(){
+const shopName=getShopName();
+const d=getShopData(shopName);
+let html=`<div class="panel"><h2>Sales Summary</h2>
+<div class="small">Total joints sold: <strong>${fmt(d.qty)}</strong></div>
+<div class="small">Total sales: <strong>${fmt(d.gross)}</strong></div>
+<div class="small">Total cut earned: <strong class="pos">${fmt(d.cut)}</strong></div>
+</div>`;
+
+const map={};
+d.sales.forEach(s=>{
+const w=weekStart(s.date);
+if(!map[w])map[w]={qty:0,gross:0,cut:0};
+map[w].qty+=Number(s.qty||0);
+map[w].gross+=Number(s.gross||0);
+map[w].cut+=Number(s.shopCut||0);
+});
+const weeks=Object.keys(map).sort().slice(-8);
+if(weeks.length){
+const max=Math.max(...weeks.map(w=>map[w].gross),1);
+html+=`<div class="panel"><h2>Weekly Sales</h2><div class="chart">`;
+weeks.forEach(w=>{
+const hG=Math.max(2,Math.round(map[w].gross/max*120));
+const hC=Math.max(2,Math.round(map[w].cut/max*120));
+html+=`<div class="week"><div class="bars">
+<div class="bar" style="height:${hG}px;background:var(--blue)" title="Sales ${fmt(map[w].gross)}"></div>
+<div class="bar" style="height:${hC}px;background:var(--green)" title="Cut ${fmt(map[w].cut)}"></div>
+</div><div class="week-label">${weekLabel(w)}</div></div>`;
+});
+html+=`</div></div>`;
+}
+
+html+=`<div class="panel"><h2>Recent Sales</h2>`;
+const recent=[...d.sales].reverse().slice(0,10);
+if(recent.length){
+recent.forEach(s=>{
+html+=`<div class="history-item">
+<div class="history-top"><span>${s.date}</span></div>
+<div class="history-details">${s.qty} joints • ${fmt(s.price)}/joint • Total ${fmt(s.gross)} • Your cut ${fmt(s.shopCut)}</div>
+</div>`;
+});
+}else{
+html+=`<div class="small">No sales yet.</div>`;
+}
+html+=`</div>`;
+document.getElementById("shopPerfContent").innerHTML=html;
+}
+
+function renderAll(){
+if(currentRole==="owner"){
+renderDashboard();renderWeekly();renderCompare();renderShops();renderSuppliers();
+renderCustomerGroups();renderSettings();renderExpenses();renderHistory();
+renderShopManagement();
+updateBatchPreview();updateSalePreview();updateShopPreview();
+}else if(currentRole){
+renderShopDashboard();renderShopPerformance();
+updateShopSalePreview();updateShopStockPreview();
+}
+}
+
+// ===== OWNER FORM PREVIEWS =====
+function updateBatchPreview(){
+const spice=+document.getElementById("batchSpice").value||0;
+const grams=+document.getElementById("batchGrams").value||0;
+const joints=+document.getElementById("batchJoints").value||0;
+const type=document.getElementById("batchType").value;
+const other=+document.getElementById("batchOther").value||0;
+const mat=spice*grams;
+const oh=joints>0?(joints/30)*state.settings.batchCostPer30:0;
+const ex=type==="bangis"?joints*state.settings.extraBangisCost:0;
+const tot=mat+oh+ex+other;
+document.getElementById("batchPreview").innerHTML=`Material <strong>${fmt(mat)}</strong> | Overhead <strong>${fmt(oh)}</strong> | Extra <strong>${fmt(ex)}</strong> | Other <strong>${fmt(other)}</strong><br/>Total <strong>${fmt(tot)}</strong> • Cost/joint <strong>${fmt2(joints>0?tot/joints:0)}</strong>`;
+}
+
+function updateSalePreview(){
+const qty=+document.getElementById("saleQty").value||0;
+const price=+document.getElementById("salePrice").value||0;
+const ch=document.getElementById("saleChannel").value;
+const pkg=document.getElementById("salePackaged").checked;
+const avg=getTotals().avgCost;
+const gross=qty*price;
+const cut=ch==="Direct"?0:qty*state.settings.shopCut;
+const net=gross-cut;
+const pack=pkg?qty*state.settings.packagingCost:0;
+const cogs=qty*avg;
+const profit=net-cogs-pack;
+document.getElementById("salePreview").innerHTML=`Gross <strong>${fmt(gross)}</strong> | Cut <strong>${fmt(cut)}</strong> | Net <strong>${fmt(net)}</strong><br/>Packaging <strong>${fmt(pack)}</strong> | COGS <strong>${fmt(cogs)}</strong> | Profit <span class="${profit>=0?"pos":"neg"}"><strong>${fmt(profit)}</strong></span>`;
+}
+
+function setGroupPrice(){
+const idx=+document.getElementById("saleCustomerGroup").value||0;
+const g=state.customerGroups[idx]||state.customerGroups[0];
+const pkg=document.getElementById("salePackaged").checked;
+document.getElementById("salePrice").value=pkg?g.packaged:g.unpackaged;
+updateSalePreview();
+}
+
+function updateShopPreview(){
+const opening=+document.getElementById("shopOpening").value||0;
+const restock=+document.getElementById("shopRestock").value||0;
+const sold=+document.getElementById("shopSold").value||0;
+const physical=+document.getElementById("shopPhysical").value||0;
+const price=+document.getElementById("shopPrice").value||0;
+const actualCash=+document.getElementById("shopCash").value||0;
+const expectedRemaining=opening+restock-sold;
+const missing=expectedRemaining-physical;
+const grossSold=sold*price;
+const cut=sold*state.settings.shopCut;
+const expectedCash=grossSold-cut;
+const cashDiff=actualCash-expectedCash;
+document.getElementById("shopPreview").innerHTML=`
+Expected remaining: <strong>${fmt(expectedRemaining)}</strong><br/>
+Missing: <span class="${missing>0?"neg":"pos"}"><strong>${fmt(missing)}</strong></span><br/>
+Expected cash: <strong>${fmt(expectedCash)}</strong><br/>
+Cash diff: <span class="${cashDiff>=0?"pos":"neg"}"><strong>${fmt(cashDiff)}</strong></span>`;
+}
+
+// ===== SHOP STAFF FORM PREVIEWS =====
+function updateShopSalePreview(){
+const qty=+document.getElementById("ssQty").value||0;
+const price=+document.getElementById("ssPrice").value||0;
+const gross=qty*price;
+const cut=qty*state.settings.shopCut;
+document.getElementById("ssPreview").innerHTML=`
+Total to collect: <strong>${fmt(gross)}</strong><br/>
+Your cut: <strong class="pos">${fmt(cut)}</strong>`;
+}
+
+function updateShopStockPreview(){
+const opening=+document.getElementById("ssOpening").value||0;
+const restock=+document.getElementById("ssRestock").value||0;
+const physical=+document.getElementById("ssPhysical").value||0;
+const expected=opening+restock;
+document.getElementById("ssStockPreview").innerHTML=`
+Expected stock: <strong>${fmt(expected)}</strong><br/>
+Physical count: <strong>${fmt(physical)}</strong><br/>
+Difference: <strong>${fmt(expected-physical)}</strong>`;
+}
+
+// ===== ADD FUNCTIONS =====
+function addBatch(){
+const date=document.getElementById("batchDate").value||today();
+const spice=+document.getElementById("batchSpice").value||0;
+const grams=+document.getElementById("batchGrams").value||0;
+const joints=+document.getElementById("batchJoints").value||0;
+const type=document.getElementById("batchType").value;
+const other=+document.getElementById("batchOther").value||0;
+if(joints<=0){alert("Enter joints produced.");return;}
+const mat=spice*grams;
+const oh=(joints/30)*state.settings.batchCostPer30;
+const ex=type==="bangis"?joints*state.settings.extraBangisCost:0;
+const tot=mat+oh+ex+other;
+state.batches.push({id:uid(),date,spiceCost:spice,grams,joints,productType:type,otherCost:other,materialCost:mat,overheadCost:oh,extraCost:ex,totalCost:tot,costPerJoint:tot/joints});
+["batchGrams","batchJoints","batchOther"].forEach(id=>document.getElementById(id).value="");
+saveState();alert("Batch saved.");
+}
+
+function addSale(){
+const date=document.getElementById("saleDate").value||today();
+const ch=document.getElementById("saleChannel").value;
+const cgIdx=+document.getElementById("saleCustomerGroup").value||0;
+const cg=state.customerGroups[cgIdx];
+const qty=+document.getElementById("saleQty").value||0;
+const pkg=document.getElementById("salePackaged").checked;
+const price=+document.getElementById("salePrice").value||0;
+const collected=document.getElementById("saleCollected").checked;
+if(qty<=0){alert("Enter quantity.");return;}
+const avg=getTotals().avgCost;
+const gross=qty*price;
+const cut=ch==="Direct"?0:qty*state.settings.shopCut;
+const net=gross-cut;
+const pack=pkg?qty*state.settings.packagingCost:0;
+const cogs=qty*avg;
+const profit=net-cogs-pack;
+state.sales.push({id:uid(),date,channel:ch,customerGroup:cg?cg.name:"Regular",qty,packaged:pkg,price,gross,shopCut:cut,net,packagingCost:pack,cogs,profit,collected});
+document.getElementById("saleQty").value="";
+saveState();alert("Sale saved.");
+}
+
+function addExpense(){
+const date=document.getElementById("expDate").value||today();
+const category=document.getElementById("expCategory").value;
+const amount=+document.getElementById("expAmount").value||0;
+const note=document.getElementById("expNote").value.trim();
+if(amount<=0){alert("Enter amount.");return;}
+const type=category==="Inventory / Stock purchase"?"inventory":"operating";
+state.expenses.push({id:uid(),date,category,amount,note,type});
+document.getElementById("expAmount").value="";
+document.getElementById("expNote").value="";
+saveState();alert("Expense saved.");
+}
+
+function addShopRec(){
+const date=document.getElementById("shopDate").value||today();
+const shop=document.getElementById("shopName").value;
+const opening=+document.getElementById("shopOpening").value||0;
+const restock=+document.getElementById("shopRestock").value||0;
+const sold=+document.getElementById("shopSold").value||0;
+const physical=+document.getElementById("shopPhysical").value||0;
+const price=+document.getElementById("shopPrice").value||0;
+const actualCash=+document.getElementById("shopCash").value||0;
+const expectedRemaining=opening+restock-sold;
+const missing=expectedRemaining-physical;
+const grossSold=sold*price;
+const cut=sold*state.settings.shopCut;
+const expectedCash=grossSold-cut;
+const cashDiff=actualCash-expectedCash;
+state.shopRecs.push({id:uid(),date,shop,opening,restock,sold,physical,expectedRemaining,missing,grossSold,cut,expectedCash,actualCash,cashDiff});
+["shopOpening","shopRestock","shopSold","shopPhysical","shopPrice","shopCash"].forEach(id=>document.getElementById(id).value="");
+saveState();alert("Reconciliation saved.");
+}
+
+function addSupplier(){
+const name=document.getElementById("supName").value.trim();
+const phone=document.getElementById("supPhone").value.trim();
+const product=document.getElementById("supProduct").value.trim();
+const priceGram=+document.getElementById("supPriceGram").value||0;
+const rating=+document.getElementById("supRating").value||0;
+const notes=document.getElementById("supNotes").value.trim();
+if(!name){alert("Enter supplier name.");return;}
+state.suppliers.push({id:uid(),name,phone,product,priceGram,rating,notes});
+["supName","supPhone","supProduct","supPriceGram","supRating","supNotes"].forEach(id=>document.getElementById(id).value="");
+saveState();alert("Supplier saved.");
+}
+
+function addCustomerGroup(){
+const name=document.getElementById("cgName").value.trim();
+const unpackaged=+document.getElementById("cgUnpackaged").value||0;
+const packaged=+document.getElementById("cgPackaged").value||0;
+if(!name){alert("Enter group name.");return;}
+state.customerGroups.push({name,unpackaged,packaged});
+["cgName","cgUnpackaged","cgPackaged"].forEach(id=>document.getElementById(id).value="");
+saveState();alert("Customer group added.");
+}
+
+// ===== SHOP STAFF ADD FUNCTIONS =====
+function addShopSale(){
+const date=document.getElementById("ssDate").value||today();
+const qty=+document.getElementById("ssQty").value||0;
+const pkg=document.getElementById("ssPackaged").checked;
+const price=+document.getElementById("ssPrice").value||0;
+const collected=document.getElementById("ssCollected").checked;
+if(qty<=0){alert("Enter quantity.");return;}
+const ch=getShopName();
+const gross=qty*price;
+const cut=qty*state.settings.shopCut;
+const net=gross-cut;
+const pack=pkg?qty*state.settings.packagingCost:0;
+const avg=getTotals().avgCost;
+const cogs=qty*avg;
+const profit=net-cogs-pack;
+state.sales.push({id:uid(),date,channel:ch,customerGroup:"Shop wholesale",qty,packaged:pkg,price,gross,shopCut:cut,net,packagingCost:pack,cogs,profit,collected});
+document.getElementById("ssQty").value="";
+saveState();alert("Sale saved.");
+}
+
+function addShopStock(){
+const date=document.getElementById("ssStockDate").value||today();
+const shop=getShopName();
+const opening=+document.getElementById("ssOpening").value||0;
+const restock=+document.getElementById("ssRestock").value||0;
+const physical=+document.getElementById("ssPhysical").value||0;
+const expected=opening+restock;
+const missing=expected-physical;
+state.shopRecs.push({id:uid(),date,shop,opening,restock,sold:0,physical,expectedRemaining:expected,missing,grossSold:0,cut:0,expectedCash:0,actualCash:0,cashDiff:0});
+["ssOpening","ssRestock","ssPhysical"].forEach(id=>document.getElementById(id).value="");
+saveState();alert("Stock check saved.");
+}
+
+// ===== DELETE FUNCTIONS =====
+function deleteSale(id){if(!confirm("Delete?"))return;state.sales=state.sales.filter(s=>s.id!==id);saveState();}
+function deleteBatch(id){if(!confirm("Delete?"))return;state.batches=state.batches.filter(b=>b.id!==id);saveState();}
+function deleteExpense(id){if(!confirm("Delete?"))return;state.expenses=state.expenses.filter(e=>e.id!==id);saveState();}
+function deleteShopRec(id){if(!confirm("Delete?"))return;state.shopRecs=state.shopRecs.filter(r=>r.id!==id);saveState();}
+function deleteSupplier(id){if(!confirm("Delete?"))return;state.suppliers=state.suppliers.filter(s=>s.id!==id);saveState();}
+function deleteCustomerGroup(i){if(!confirm("Delete?"))return;state.customerGroups.splice(i,1);saveState();}
+
+// ===== REPORTS =====
+function generateReport(type){
+const t=getTotals();
+const channels=getChannelData();
+const weeks=getWeeklyData();
+const now=new Date().toLocaleDateString();
+let txt="";
+if(type==="daily"){
+const todayStr=today();
+const todaySales=state.sales.filter(s=>s.date===todayStr);
+const todayQty=todaySales.reduce((s,x)=>s+x.qty,0);
+const todayNet=todaySales.reduce((s,x)=>s+x.net,0);
+const todayProfit=todaySales.reduce((s,x)=>s+x.profit,0);
+txt=`📊 DAILY REPORT - ${now}\nJoints sold: ${fmt(todayQty)}\nNet sales: ${fmt(todayNet)}\nProfit: ${fmt(todayProfit)}\nCash: ${fmt(t.cash)}`;
+}else if(type==="weekly"){
+txt=`📊 WEEKLY REPORT - ${now}\n`;
+weeks.forEach(w=>{txt+=`${weekLabel(w.week)}: Sales ${fmt(w.net)} | Out ${fmt(w.out)} | Profit ${fmt(w.profit)}\n`;});
+txt+=`\nTotal profit: ${fmt(t.profit)}`;
+}else if(type==="shops"){
+txt=`🏪 SHOP REPORT - ${now}\n`;
+const recs=[...state.shopRecs].reverse().slice(0,5);
+if(!recs.length)txt+="No reconciliations yet.";
+else recs.forEach(r=>{txt+=`\n${r.date} - ${r.shop}\nSold: ${fmt(r.sold)} | Missing: ${fmt(r.missing)}\nExpected: ${fmt(r.expectedCash)} | Actual: ${fmt(r.actualCash)}\nDiff: ${fmt(r.cashDiff)}\n`;});
+}else if(type==="full"){
+txt=`📋 FULL REPORT - ${now}\nCash: ${fmt(t.cash)}\nProfit: ${fmt(t.profit)}\nProduced: ${fmt(t.produced)}\nSold: ${fmt(t.sold)}\nInventory: ${fmt(t.inventory)}\n\nCHANNELS:\n`;
+Object.keys(channels).forEach(k=>{const c=channels[k];txt+=`${k}: ${fmt(c.qty)} joints | Profit ${fmt(c.profit)}\n`;});
+txt+=`\nProgress to 1M: ${clampPct(t.businessValue,1000000).toFixed(1)}%`;
+}
+currentReportText=txt;
+document.getElementById("reportPreview").textContent=txt;
+}
+
+function copyReport(){
+if(!currentReportText){alert("Generate a report first.");return;}
+navigator.clipboard.writeText(currentReportText).then(()=>alert("Copied!")).catch(()=>{
+const ta=document.createElement("textarea");ta.value=currentReportText;document.body.appendChild(ta);ta.select();document.execCommand("copy");document.body.removeChild(ta);alert("Copied!");
+});
+}
+
+function shareWhatsApp(){
+if(!currentReportText){alert("Generate a report first.");return;}
+window.open("https://wa.me/?text="+encodeURIComponent(currentReportText),"_blank");
+}
+
+// ===== BACKUP =====
+function exportData(){
+const blob=new Blob([JSON.stringify(state,null,2)],{type:"application/json"});
+const a=document.createElement("a");
+a.href=URL.createObjectURL(blob);
+a.download="biz-tracker-v6-backup.json";
+a.click();
+URL.revokeObjectURL(a.href);
+}
+
+function importData(ev){
+const f=ev.target.files[0];
+if(!f)return;
+const r=new FileReader();
+r.onload=e=>{
+try{state=migrateState(JSON.parse(e.target.result));saveState();renderLoginRoles();renderShopDropdowns();alert("Imported.");}
+catch(err){alert("Invalid file.");}
+};
+r.readAsText(f);
+ev.target.value="";
+}
+
+function resetApp(){
+if(!confirm("Delete all data?"))return;
+if(!confirm("Final warning."))return;
+state=migrateState({});
+saveState();
+renderLoginRoles();
+renderShopDropdowns();
+alert("Reset done.");
+}
+
+function saveSettings(){
+state.settings.startingCapital=+document.getElementById("setStarting").value||0;
+state.settings.batchCostPer30=+document.getElementById("setBatchCost").value||0;
+state.settings.packagingCost=+document.getElementById("setPackaging").value||0;
+state.settings.shopCut=+document.getElementById("setShopCut").value||0;
+state.settings.extraBangisCost=+document.getElementById("setExtraBangis").value||0;
+state.settings.defaultUnpackagedPrice=+document.getElementById("setDefaultUnpackaged").value||0;
+state.settings.defaultPackagedPrice=+document.getElementById("setDefaultPackaged").value||0;
+saveState();alert("Settings saved.");
+}
+
+function saveOwnerPin(){
+state.ownerPin=document.getElementById("pinOwner").value||"1234";
+saveState();alert("Owner PIN saved.");
+}
+
+// ===== INIT =====
+document.addEventListener("DOMContentLoaded",function(){
+document.getElementById("ownerNav").querySelectorAll("button").forEach(b=>b.addEventListener("click",()=>switchTab(b.dataset.tab)));
+document.getElementById("shopNav").querySelectorAll("button").forEach(b=>b.addEventListener("click",()=>switchTab(b.dataset.tab)));
+
+document.getElementById("saleDate").value=today();
+document.getElementById("batchDate").value=today();
+document.getElementById("expDate").value=today();
+document.getElementById("shopDate").value=today();
+document.getElementById("ssDate").value=today();
+document.getElementById("ssStockDate").value=today();
+document.getElementById("salePrice").value=state.settings.defaultUnpackagedPrice;
+document.getElementById("ssPrice").value=state.settings.defaultUnpackagedPrice;
+
+if(cloudConfig){
+document.getElementById("cloudUrl").value=cloudConfig.url||"";
+document.getElementById("cloudKey").value=cloudConfig.key||"";
+}
+
+// Render dynamic elements
+renderLoginRoles();
+renderShopDropdowns();
+renderShopManagement();
+
+// Cloud settings
+document.getElementById("saveCloud").addEventListener("click",function(){
+const url=document.getElementById("cloudUrl").value.trim();
+const key=document.getElementById("cloudKey").value.trim();
+if(!url||!key){alert("Enter both URL and key.");return;}
+localStorage.setItem(CLOUD_KEY,JSON.stringify({url,key}));
+location.reload();
+});
+document.getElementById("clearCloud").addEventListener("click",function(){
+localStorage.removeItem(CLOUD_KEY);
+location.reload();
+});
+
+// Owner sale form
+document.getElementById("salePrice").addEventListener("input",function(){this.dataset.manual="true";updateSalePreview();});
+document.getElementById("salePackaged").addEventListener("change",function(){
+if(document.getElementById("salePrice").dataset.manual!=="true")setGroupPrice();
+else updateSalePreview();
+});
+document.getElementById("saleCustomerGroup").addEventListener("change",function(){
+if(document.getElementById("salePrice").dataset.manual!=="true")setGroupPrice();
+});
+document.getElementById("resetSalePrice").addEventListener("click",setGroupPrice);
+["saleQty","saleChannel"].forEach(id=>{
+document.getElementById(id).addEventListener("input",updateSalePreview);
+document.getElementById(id).addEventListener("change",updateSalePreview);
+});
+
+// Batch form
+["batchSpice","batchGrams","batchJoints","batchType","batchOther"].forEach(id=>{
+document.getElementById(id).addEventListener("input",updateBatchPreview);
+document.getElementById(id).addEventListener("change",updateBatchPreview);
+});
+
+// Shop reconciliation form
+["shopOpening","shopRestock","shopSold","shopPhysical","shopPrice","shopCash"].forEach(id=>{
+document.getElementById(id).addEventListener("input",updateShopPreview);
+document.getElementById(id).addEventListener("change",updateShopPreview);
+});
+
+// Shop staff sale form
+["ssQty","ssPrice"].forEach(id=>{
+document.getElementById(id).addEventListener("input",updateShopSalePreview);
+document.getElementById(id).addEventListener("change",updateShopSalePreview);
+});
+document.getElementById("ssPackaged").addEventListener("change",updateShopSalePreview);
+
+// Shop staff stock form
+["ssOpening","ssRestock","ssPhysical"].forEach(id=>{
+document.getElementById(id).addEventListener("input",updateShopStockPreview);
+document.getElementById(id).addEventListener("change",updateShopStockPreview);
+});
+
+// Shop management
+document.getElementById("addShopBtn").addEventListener("click",addShop);
+
+// Add buttons
+document.getElementById("addBatch").addEventListener("click",addBatch);
+document.getElementById("addSale").addEventListener("click",addSale);
+document.getElementById("addExpense").addEventListener("click",addExpense);
+document.getElementById("addShopRec").addEventListener("click",addShopRec);
+document.getElementById("addSupplier").addEventListener("click",addSupplier);
+document.getElementById("addCustomerGroup").addEventListener("click",addCustomerGroup);
+document.getElementById("addShopSale").addEventListener("click",addShopSale);
+document.getElementById("addShopStock").addEventListener("click",addShopStock);
+document.getElementById("saveSettings").addEventListener("click",saveSettings);
+document.getElementById("saveOwnerPin").addEventListener("click",saveOwnerPin);
+document.getElementById("exportData").addEventListener("click",exportData);
+document.getElementById("importFile").addEventListener("change",importData);
+document.getElementById("resetApp").addEventListener("click",resetApp);
+
+initCloud();
+renderAuth();
+});
+</script>
+</body>
+</html>
